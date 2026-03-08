@@ -13,7 +13,7 @@ namespace OpenClawInstaller
         private readonly string githubProxy;
         private readonly bool isDebug;
 
-        private readonly string nodeUrl = "https://registry.npmmirror.com/-/binary/node/v25.8.0/node-v25.8.0-win-x64.zip";
+        private readonly string nodeUrl = "https://registry.npmmirror.com/-/binary/node/v20.11.1/node-v20.11.1-win-x64.zip";
         private readonly string gitUrl = "https://npmmirror.com/mirrors/git-for-windows/v2.44.0.windows.1/MinGit-2.44.0-64-bit.zip";
 
         public DeployWorker(string installDir, string githubProxy, bool isDebug = false)
@@ -235,37 +235,54 @@ namespace OpenClawInstaller
             progress.Report(80);
 
             // ==========================================
-            // 6. 生成交互式 start.ps1 启动脚本 (集成初始化与守护功能)
+            // 6. 生成交互式 start.ps1 启动脚本 
             // ==========================================
             logger.Report("正在生成 start.ps1 交互式启动脚本...");
             string ps1Path = Path.Combine(installDir, "start.ps1");
 
             var ps1Builder = new StringBuilder();
-            ps1Builder.AppendLine("if ($PSVersionTable.PSVersion.Major -le 5) {");
-            ps1Builder.AppendLine("    $code = @\"");
-            ps1Builder.AppendLine("using System;");
-            ps1Builder.AppendLine("using System.Runtime.InteropServices;");
-            ps1Builder.AppendLine("public class AnsiSupport {");
-            ps1Builder.AppendLine("    [DllImport(\"kernel32.dll\", SetLastError = true)]");
-            ps1Builder.AppendLine("    private static extern IntPtr GetStdHandle(int handle);");
-            ps1Builder.AppendLine("    [DllImport(\"kernel32.dll\", SetLastError = true)]");
-            ps1Builder.AppendLine("    private static extern bool GetConsoleMode(IntPtr handle, out uint mode);");
-            ps1Builder.AppendLine("    [DllImport(\"kernel32.dll\", SetLastError = true)]");
-            ps1Builder.AppendLine("    private static extern bool SetConsoleMode(IntPtr handle, uint mode);");
-            ps1Builder.AppendLine("    public static void EnableAnsi() {");
-            ps1Builder.AppendLine("        var handle = GetStdHandle(-11);");
-            ps1Builder.AppendLine("        uint mode;");
-            ps1Builder.AppendLine("        GetConsoleMode(handle, out mode);");
-            ps1Builder.AppendLine("        mode |= 0x0004; // ENABLE_VIRTUAL_TERMINAL_PROCESSING");
-            ps1Builder.AppendLine("        SetConsoleMode(handle, mode);");
-            ps1Builder.AppendLine("    }");
-            ps1Builder.AppendLine("}");
-            ps1Builder.AppendLine("\"@");
-            ps1Builder.AppendLine("    Add-Type -TypeDefinition $code");
-            ps1Builder.AppendLine("    [AnsiSupport]::EnableAnsi()");
-            ps1Builder.AppendLine("}");
-            ps1Builder.AppendLine("$host.UI.RawUI.WindowTitle = \"OpenClaw 启动器\"");
+            
             ps1Builder.AppendLine("$scriptDir = $PSScriptRoot");
+            ps1Builder.AppendLine("");
+            
+            // 优先唤起 Windows Terminal (使用 Base64 编码彻底解决安装路径带空格时的转义报错问题)
+            ps1Builder.AppendLine("# 如果系统安装了 Windows Terminal 且当前不在其中，则使用其打开（优先获取最佳显示支持）");
+            ps1Builder.AppendLine("if ($env:WT_SESSION -eq $null -and (Get-Command wt.exe -ErrorAction SilentlyContinue)) {");
+            ps1Builder.AppendLine("    $launchCmd = \"& `\"$PSCommandPath`\"\";");
+            ps1Builder.AppendLine("    $encodedLaunch = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($launchCmd))");
+            ps1Builder.AppendLine("    Start-Process wt.exe -ArgumentList \"-w new-tab --title OpenClaw启动器 powershell -NoExit -EncodedCommand $encodedLaunch\"");
+            ps1Builder.AppendLine("    exit");
+            ps1Builder.AppendLine("}");
+            ps1Builder.AppendLine("");
+            
+            // 开启 ANSI 支持 (控制台输出彩色内容必需，防止在旧版原生终端中乱码)
+            ps1Builder.AppendLine("if ($PSVersionTable.PSVersion.Major -le 5 -or $env:WT_SESSION -eq $null) {");
+            ps1Builder.AppendLine("    try {");
+            ps1Builder.AppendLine("        $code = @\"");
+            ps1Builder.AppendLine("        using System;");
+            ps1Builder.AppendLine("        using System.Runtime.InteropServices;");
+            ps1Builder.AppendLine("        public class AnsiSupport {");
+            ps1Builder.AppendLine("            [DllImport(\"kernel32.dll\", SetLastError = true)]");
+            ps1Builder.AppendLine("            private static extern IntPtr GetStdHandle(int handle);");
+            ps1Builder.AppendLine("            [DllImport(\"kernel32.dll\", SetLastError = true)]");
+            ps1Builder.AppendLine("            private static extern bool GetConsoleMode(IntPtr handle, out uint mode);");
+            ps1Builder.AppendLine("            [DllImport(\"kernel32.dll\", SetLastError = true)]");
+            ps1Builder.AppendLine("            private static extern bool SetConsoleMode(IntPtr handle, uint mode);");
+            ps1Builder.AppendLine("            public static void Enable() {");
+            ps1Builder.AppendLine("                var handle = GetStdHandle(-11);");
+            ps1Builder.AppendLine("                if (GetConsoleMode(handle, out uint mode)) {");
+            ps1Builder.AppendLine("                    SetConsoleMode(handle, mode | 0x0004);");
+            ps1Builder.AppendLine("                }");
+            ps1Builder.AppendLine("            }");
+            ps1Builder.AppendLine("        }");
+            ps1Builder.AppendLine("\"@");
+            ps1Builder.AppendLine("        Add-Type -TypeDefinition $code -ErrorAction SilentlyContinue");
+            ps1Builder.AppendLine("        [AnsiSupport]::Enable()");
+            ps1Builder.AppendLine("    } catch {}");
+            ps1Builder.AppendLine("}");
+            ps1Builder.AppendLine("");
+
+            ps1Builder.AppendLine("$host.UI.RawUI.WindowTitle = \"OpenClaw启动器\"");
             ps1Builder.AppendLine("$env:PATH = \"$scriptDir\\nodejs;$scriptDir\\git_env\\cmd;$env:PATH\"");
             ps1Builder.AppendLine("Set-Location -Path \"$scriptDir\\openclaw_app\"");
             ps1Builder.AppendLine("");
@@ -273,6 +290,9 @@ namespace OpenClawInstaller
             ps1Builder.AppendLine("    Clear-Host");
             ps1Builder.AppendLine("    Write-Host \"  🦞 OpenClaw\"");
             ps1Builder.AppendLine("    Write-Host \"  All your chats, one OpenClaw.\"");
+            ps1Builder.AppendLine("    if (-not (Get-Command wt.exe -ErrorAction SilentlyContinue)) {");
+            ps1Builder.AppendLine("        Write-Host \"  [提示] 您的系统未安装 Windows Terminal，界面排版和图标可能无法完美显示。\" -ForegroundColor DarkYellow");
+            ps1Builder.AppendLine("    }");
             ps1Builder.AppendLine("    Write-Host \"\"");
             ps1Builder.AppendLine("    Write-Host \"1. 运行 Onboard 向导 (官方引导设置，英文版)\"");
             ps1Builder.AppendLine("    Write-Host \"2. 运行 Gateway\"");
@@ -319,7 +339,14 @@ namespace OpenClawInstaller
             ps1Builder.AppendLine("}");
             ps1Builder.AppendLine("");
             ps1Builder.AppendLine("function Open-Terminal {");
-            ps1Builder.AppendLine("    Start-Process powershell -ArgumentList \"-NoExit\", \"-Command\", \"Set-Location -Path '$scriptDir\\openclaw_app'; `$env:PATH = '$scriptDir\\nodejs;$scriptDir\\git_env\\cmd;`$env:PATH'\"");
+            // 使用 Base64 传递复杂的执行语句，完美规避带空格路径时的命令行引号转义错误
+            ps1Builder.AppendLine("    $initCmd = \"Set-Location -LiteralPath `\"$scriptDir\\openclaw_app`\"; `$env:PATH = `\"$scriptDir\\nodejs;$scriptDir\\git_env\\cmd;`$env:PATH`\"\";");
+            ps1Builder.AppendLine("    $encodedCmd = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($initCmd))");
+            ps1Builder.AppendLine("    if (Get-Command wt.exe -ErrorAction SilentlyContinue) {");
+            ps1Builder.AppendLine("        Start-Process wt.exe -ArgumentList \"-w new-tab --title OpenClaw终端 powershell -NoExit -EncodedCommand $encodedCmd\"");
+            ps1Builder.AppendLine("    } else {");
+            ps1Builder.AppendLine("        Start-Process powershell -ArgumentList \"-NoExit\", \"-EncodedCommand\", $encodedCmd");
+            ps1Builder.AppendLine("    }");
             ps1Builder.AppendLine("    Write-Host \"已打开新终端窗口，可以直接运行 openclaw 命令。按任意键返回主菜单...\"");
             ps1Builder.AppendLine("    $null = $host.UI.RawUI.ReadKey(\"NoEcho,IncludeKeyDown\")");
             ps1Builder.AppendLine("    Show-Menu");
