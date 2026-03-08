@@ -245,8 +245,8 @@ namespace OpenClawInstaller
             ps1Builder.AppendLine("$scriptDir = $PSScriptRoot");
             ps1Builder.AppendLine("");
             
-            // 优先唤起 Windows Terminal (使用 Base64 编码彻底解决安装路径带空格时的转义报错问题)
-            ps1Builder.AppendLine("# 如果系统安装了 Windows Terminal 且当前不在其中，则使用其打开（优先获取最佳显示支持）");
+            // 优先唤起 Windows Terminal
+            ps1Builder.AppendLine("# 如果系统安装了 Windows Terminal 且当前不在其中，则使用其打开");
             ps1Builder.AppendLine("if ($env:WT_SESSION -eq $null -and (Get-Command wt.exe -ErrorAction SilentlyContinue)) {");
             ps1Builder.AppendLine("    $launchCmd = \"& `\"$PSCommandPath`\"\";");
             ps1Builder.AppendLine("    $encodedLaunch = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($launchCmd))");
@@ -255,7 +255,7 @@ namespace OpenClawInstaller
             ps1Builder.AppendLine("}");
             ps1Builder.AppendLine("");
             
-            // 开启 ANSI 支持 (控制台输出彩色内容必需，防止在旧版原生终端中乱码)
+            // 开启 ANSI 支持
             ps1Builder.AppendLine("if ($PSVersionTable.PSVersion.Major -le 5 -or $env:WT_SESSION -eq $null) {");
             ps1Builder.AppendLine("    try {");
             ps1Builder.AppendLine("        $code = @\"");
@@ -339,7 +339,6 @@ namespace OpenClawInstaller
             ps1Builder.AppendLine("}");
             ps1Builder.AppendLine("");
             ps1Builder.AppendLine("function Open-Terminal {");
-            // 使用 Base64 传递复杂的执行语句，完美规避带空格路径时的命令行引号转义错误
             ps1Builder.AppendLine("    $initCmd = \"Set-Location -LiteralPath `\"$scriptDir\\openclaw_app`\"; `$env:PATH = `\"$scriptDir\\nodejs;$scriptDir\\git_env\\cmd;`$env:PATH`\"\";");
             ps1Builder.AppendLine("    $encodedCmd = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($initCmd))");
             ps1Builder.AppendLine("    if (Get-Command wt.exe -ErrorAction SilentlyContinue) {");
@@ -355,9 +354,21 @@ namespace OpenClawInstaller
             ps1Builder.AppendLine("Show-Menu");
 
             string ps1Content = ps1Builder.ToString();
-
             File.WriteAllText(ps1Path, ps1Content, new UTF8Encoding(true));
             DebugLog(logger, $"启动脚本已保存至: {ps1Path}");
+
+            // ==========================================
+            // 6.5 生成 start.bat 快捷启动文件 (解决双击 .ps1 变成编辑的问题)
+            // ==========================================
+            logger.Report("正在生成 start.bat 快捷启动文件...");
+            string batPath = Path.Combine(installDir, "点我运行.bat");
+            // 使用带有绕过执行策略参数的命令
+            string batContent = "@echo off\r\n" +
+                                "pushd \"%~dp0\"\r\n" +
+                                "powershell -ExecutionPolicy Bypass -File \"start.ps1\"\r\n" +
+                                "popd";
+            File.WriteAllText(batPath, batContent, Encoding.Default); 
+            DebugLog(logger, $"批处理启动文件已保存至: {batPath}");
 
             // ==========================================
             // 7. 清理临时文件
@@ -393,5 +404,4 @@ namespace OpenClawInstaller
             }
         }
     }
-
 }
