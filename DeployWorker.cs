@@ -13,7 +13,7 @@ namespace OpenClawInstaller
         private readonly string githubProxy;
         private readonly bool isDebug;
 
-        private readonly string nodeUrl = "https://registry.npmmirror.com/-/binary/node/v20.18.3/node-v20.18.3-win-x64.zip";
+        private readonly string nodeUrl = "https://registry.npmmirror.com/-/binary/node/v22.13.1/node-v22.13.1-win-x64.zip";
         private readonly string gitUrl = "https://npmmirror.com/mirrors/git-for-windows/v2.44.0.windows.1/MinGit-2.44.0-64-bit.zip";
 
         public DeployWorker(string installDir, string githubProxy, bool isDebug = false)
@@ -464,5 +464,6 @@ namespace OpenClawInstaller
         }
     }
 }
+
 
 
