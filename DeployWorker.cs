@@ -230,7 +230,18 @@ namespace OpenClawInstaller
                 psiInstall.EnvironmentVariables["PATH"] = customPathEnv;
                 DebugLog(logger, $"[Critical] Setting BUILD_TYPE to: {buildType}");
                 DebugLog(logger, $"执行命令: {psiInstall.FileName} {psiInstall.Arguments}");
-
+                // ========== 必须新增以下代码（针对虚拟机崩溃的终极杀招） ==========
+                if (buildType == "cpu")
+                {
+                 // 终极绝杀 1：彻底禁止 node-llama-cpp 去网上找预编译包和乱摸显卡
+                 psiInstall.EnvironmentVariables["NODE_LLAMA_CPP_SKIP_DOWNLOAD"] = "true";
+    
+                 // 终极绝杀 2：强迫它在本地老老实实地只用 CPU 编译
+                 psiInstall.EnvironmentVariables["NODE_LLAMA_CPP_FORCE_BUILD"] = "true";
+    
+                 DebugLog(logger, "[VM Safe Mode] Forced local CPU build to prevent probing crash.");
+                 }
+                // =================================================================
                 using (var process = new Process { StartInfo = psiInstall })
                 {
                     process.OutputDataReceived += (s, e) => { if (!string.IsNullOrEmpty(e.Data)) logger.Report($"[NPM] {e.Data.Trim()}"); };
@@ -460,6 +471,7 @@ namespace OpenClawInstaller
         }
     }
 }
+
 
 
 
