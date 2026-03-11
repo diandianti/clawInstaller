@@ -228,7 +228,7 @@ namespace OpenClawInstaller
 
                 psiInstall.EnvironmentVariables["NODE_LLAMA_CPP_BUILD_TYPE"] = buildType;
                 psiInstall.EnvironmentVariables["PATH"] = customPathEnv;
-
+                DebugLog(logger, $"[Critical] Setting BUILD_TYPE to: {buildType}");
                 DebugLog(logger, $"执行命令: {psiInstall.FileName} {psiInstall.Arguments}");
 
                 using (var process = new Process { StartInfo = psiInstall })
@@ -314,21 +314,15 @@ namespace OpenClawInstaller
 
             ps1Builder.AppendLine("$host.UI.RawUI.WindowTitle = \"OpenClaw启动器\"");
             ps1Builder.AppendLine("$env:PATH = \"$scriptDir\\nodejs;$scriptDir\\git_env\\cmd;$env:PATH\"");
-            // 插入以下智能探测逻辑：
-            ps1Builder.AppendLine("# 智能硬件探测：防止在虚拟机或无显卡环境下崩溃");
+            // 注入智能探测逻辑：确保在虚拟机环境下不崩溃
+            ps1Builder.AppendLine("# 智能硬件探测");
             ps1Builder.AppendLine("try {");
             ps1Builder.AppendLine("    $ErrorActionPreference = 'SilentlyContinue'");
             ps1Builder.AppendLine("    nvidia-smi -L > $null 2>&1");
-            ps1Builder.AppendLine("    if ($LASTEXITCODE -eq 0) {");
-            ps1Builder.AppendLine("        $env:NODE_LLAMA_CPP_BUILD_TYPE = \"cuda\"");
-            ps1Builder.AppendLine("    } else {");
-            ps1Builder.AppendLine("        $env:NODE_LLAMA_CPP_BUILD_TYPE = \"cpu\"");
-            ps1Builder.AppendLine("    }");
-            ps1Builder.AppendLine("} catch {");
-            ps1Builder.AppendLine("    $env:NODE_LLAMA_CPP_BUILD_TYPE = \"cpu\"");
-            ps1Builder.AppendLine("} finally {");
-            ps1Builder.AppendLine("    $ErrorActionPreference = 'Continue'");
-            ps1Builder.AppendLine("}");
+            ps1Builder.AppendLine("    if ($LASTEXITCODE -eq 0) { $env:NODE_LLAMA_CPP_BUILD_TYPE = \"\"cuda\"\" }"); 
+            ps1Builder.AppendLine("    else { $env:NODE_LLAMA_CPP_BUILD_TYPE = \"\"cpu\"\" }");
+            ps1Builder.AppendLine("} catch { $env:NODE_LLAMA_CPP_BUILD_TYPE = \"\"cpu\"\" }");
+            ps1Builder.AppendLine("finally { $ErrorActionPreference = 'Continue' }");
             
             ps1Builder.AppendLine("Set-Location -Path \"$scriptDir\\openclaw_app\"");
             ps1Builder.AppendLine("");
@@ -466,6 +460,7 @@ namespace OpenClawInstaller
         }
     }
 }
+
 
 
 
