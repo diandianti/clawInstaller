@@ -215,7 +215,6 @@ namespace OpenClawInstaller
                 // --- 智能检测逻辑结束 ---
                 var psiInstall = new ProcessStartInfo
                 {
-                    var psiInstall = new ProcessStartInfo {
                         FileName = npmCmdPath,
                         Arguments = npmInstallArgs, 
                         WorkingDirectory = appDir,
@@ -467,6 +466,7 @@ namespace OpenClawInstaller
         }
     }
 }
+
 
 
 
