@@ -13,7 +13,7 @@ namespace OpenClawInstaller
         private readonly string githubProxy;
         private readonly bool isDebug;
 
-        private readonly string nodeUrl = "https://registry.npmmirror.com/-/binary/node/v25.8.0/node-v25.8.0-win-x64.zip";
+        private readonly string nodeUrl = "https://registry.npmmirror.com/-/binary/node/v22.13.1/node-v22.13.1-win-x64.zip";
         private readonly string gitUrl = "https://npmmirror.com/mirrors/git-for-windows/v2.44.0.windows.1/MinGit-2.44.0-64-bit.zip";
 
         public DeployWorker(string installDir, string githubProxy, bool isDebug = false)
@@ -185,22 +185,63 @@ namespace OpenClawInstaller
             {
                 logger.Report($"正在通过 npm 安装 OpenClaw 核心组件 (第 {i + 1} 次尝试，最多 {maxRetries} 次)...");
                 if (i == 0) progress.Report(60);
+                // --- 智能检测逻辑开始 ---
+                string buildType = "cpu"; // 默认使用 CPU
+                try 
+                {
+                   // 尝试运行 nvidia-smi 检查是否有 NVIDIA 显卡
+                   var checkGpu = new ProcessStartInfo
+                   {
+                       FileName = "nvidia-smi",
+                       Arguments = "-L",
+                       RedirectStandardOutput = true,
+                       UseShellExecute = false,
+                       CreateNoWindow = true
+                   };
+                   using (var p = Process.Start(checkGpu))
+                   {
+                        p.WaitForExit();
+                        // 如果 nvidia-smi 成功运行且退出码为 0，说明有 NVIDIA 驱动
+                        if (p.ExitCode == 0) buildType = "cuda"; 
+                    }
+                }
+                catch 
+                {
+                   // 找不到 nvidia-smi 说明没显卡或驱动，默认走 cpu
+                   buildType = "cpu";
+                 }
 
+                 DebugLog(logger, $"检测到环境，设置编译类型为: {buildType}");
+                // --- 智能检测逻辑结束 ---
                 var psiInstall = new ProcessStartInfo
                 {
-                    FileName = npmCmdPath,
-                    Arguments = npmInstallArgs,
-                    WorkingDirectory = appDir,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    StandardOutputEncoding = Encoding.UTF8
+                        FileName = npmCmdPath,
+                        Arguments = npmInstallArgs, 
+                        WorkingDirectory = appDir,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        StandardOutputEncoding = Encoding.UTF8,
+                        StandardErrorEncoding = Encoding.UTF8
                 };
+
+                psiInstall.EnvironmentVariables["NODE_LLAMA_CPP_BUILD_TYPE"] = buildType;
                 psiInstall.EnvironmentVariables["PATH"] = customPathEnv;
-
+                DebugLog(logger, $"[Critical] Setting BUILD_TYPE to: {buildType}");
                 DebugLog(logger, $"执行命令: {psiInstall.FileName} {psiInstall.Arguments}");
-
+                // ========== 针对未检测到 GPU 的环境，强制本地 CPU 编译==========
+                if (buildType == "cpu")
+                {
+                 // 彻底禁止 node-llama-cpp 去网上找预编译包和乱摸显卡
+                 psiInstall.EnvironmentVariables["NODE_LLAMA_CPP_SKIP_DOWNLOAD"] = "true";
+    
+                 // 强迫node-llama-cpp在本地只用 CPU 编译
+                 psiInstall.EnvironmentVariables["NODE_LLAMA_CPP_FORCE_BUILD"] = "true";
+    
+                 DebugLog(logger, "[VM Safe Mode] Forced local CPU build to prevent probing crash.");
+                 }
+                // =================================================================
                 using (var process = new Process { StartInfo = psiInstall })
                 {
                     process.OutputDataReceived += (s, e) => { if (!string.IsNullOrEmpty(e.Data)) logger.Report($"[NPM] {e.Data.Trim()}"); };
@@ -284,6 +325,16 @@ namespace OpenClawInstaller
 
             ps1Builder.AppendLine("$host.UI.RawUI.WindowTitle = \"OpenClaw启动器\"");
             ps1Builder.AppendLine("$env:PATH = \"$scriptDir\\nodejs;$scriptDir\\git_env\\cmd;$env:PATH\"");
+            // 注入智能探测逻辑：确保在虚拟机环境下不崩溃
+            ps1Builder.AppendLine("# 智能硬件探测");
+            ps1Builder.AppendLine("try {");
+            ps1Builder.AppendLine("    $ErrorActionPreference = 'SilentlyContinue'");
+            ps1Builder.AppendLine("    nvidia-smi -L > $null 2>&1");
+            ps1Builder.AppendLine("    if ($LASTEXITCODE -eq 0) { $env:NODE_LLAMA_CPP_BUILD_TYPE = 'cuda' }");
+            ps1Builder.AppendLine("    else { $env:NODE_LLAMA_CPP_BUILD_TYPE = 'cpu' }");
+            ps1Builder.AppendLine("} catch { $env:NODE_LLAMA_CPP_BUILD_TYPE = 'cpu' }");
+            ps1Builder.AppendLine("finally { $ErrorActionPreference = 'Continue' }");
+            
             ps1Builder.AppendLine("Set-Location -Path \"$scriptDir\\openclaw_app\"");
             ps1Builder.AppendLine("");
                         // --- 插入修复代码：定义缺失的 Run-Onboard 函数 ---
@@ -420,4 +471,13 @@ namespace OpenClawInstaller
         }
     }
 }
+
+
+
+
+
+
+
+
+
 
