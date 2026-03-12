@@ -12,15 +12,18 @@ namespace OpenClawInstaller
         private readonly string installDir;
         private readonly string githubProxy;
         private readonly bool isDebug;
+        private readonly bool saveDataLocal; // 新增字段
 
         private readonly string nodeUrl = "https://registry.npmmirror.com/-/binary/node/v22.13.1/node-v22.13.1-win-x64.zip";
         private readonly string gitUrl = "https://npmmirror.com/mirrors/git-for-windows/v2.44.0.windows.1/MinGit-2.44.0-64-bit.zip";
 
-        public DeployWorker(string installDir, string githubProxy, bool isDebug = false)
+        // 构造函数增加 saveDataLocal 参数
+        public DeployWorker(string installDir, string githubProxy, bool isDebug = false, bool saveDataLocal = false)
         {
             this.installDir = Path.GetFullPath(installDir);
             this.githubProxy = githubProxy?.Trim();
             this.isDebug = isDebug;
+            this.saveDataLocal = saveDataLocal;
         }
 
         private void DebugLog(IProgress<string> logger, string message)
@@ -40,6 +43,26 @@ namespace OpenClawInstaller
             string nodejsDir = Path.Combine(installDir, "nodejs");
             string gitDir = Path.Combine(installDir, "git_env");
             string appDir = Path.Combine(installDir, "openclaw_app");
+            string dataDir = Path.Combine(installDir, "data");
+
+            if (saveDataLocal)
+            {
+                Directory.CreateDirectory(dataDir);
+                logger.Report($"已启用便携模式，数据将保存在: {dataDir}");
+            }
+
+            // 环境变量注入助手方法
+            void ApplyEnv(ProcessStartInfo psi, string pathEnv)
+            {
+                psi.EnvironmentVariables["PATH"] = pathEnv;
+                if (saveDataLocal)
+                {
+                    psi.EnvironmentVariables["USERPROFILE"] = dataDir;
+                    psi.EnvironmentVariables["HOME"] = dataDir;
+                    psi.EnvironmentVariables["APPDATA"] = Path.Combine(dataDir, "AppData", "Roaming");
+                    psi.EnvironmentVariables["LOCALAPPDATA"] = Path.Combine(dataDir, "AppData", "Local");
+                }
+            }
 
             // ==========================================
             // 1. 处理 Node.js 环境
@@ -122,7 +145,7 @@ namespace OpenClawInstaller
                 CreateNoWindow = true,
                 StandardOutputEncoding = Encoding.UTF8
             };
-            psiNpmConfig.EnvironmentVariables["PATH"] = customPathEnv;
+            ApplyEnv(psiNpmConfig, customPathEnv);
 
             using (var process = new Process { StartInfo = psiNpmConfig })
             {
@@ -160,7 +183,7 @@ namespace OpenClawInstaller
                     CreateNoWindow = true,
                     StandardOutputEncoding = Encoding.UTF8
                 };
-                psiGitConfig.EnvironmentVariables["PATH"] = customPathEnv;
+                ApplyEnv(psiGitConfig, customPathEnv);
 
                 using (var process = new Process { StartInfo = psiGitConfig })
                 {
@@ -226,8 +249,9 @@ namespace OpenClawInstaller
                         StandardErrorEncoding = Encoding.UTF8
                 };
 
+                ApplyEnv(psiInstall, customPathEnv);
                 psiInstall.EnvironmentVariables["NODE_LLAMA_CPP_BUILD_TYPE"] = buildType;
-                psiInstall.EnvironmentVariables["PATH"] = customPathEnv;
+                
                 DebugLog(logger, $"[Critical] Setting BUILD_TYPE to: {buildType}");
                 DebugLog(logger, $"执行命令: {psiInstall.FileName} {psiInstall.Arguments}");
                 // ========== 针对未检测到 GPU 的环境，强制本地 CPU 编译==========
@@ -324,7 +348,23 @@ namespace OpenClawInstaller
             ps1Builder.AppendLine("");
 
             ps1Builder.AppendLine("$host.UI.RawUI.WindowTitle = \"OpenClaw启动器\"");
-            ps1Builder.AppendLine("$env:PATH = \"$scriptDir\\nodejs;$scriptDir\\git_env\\cmd;$env:PATH\"");
+            
+            // 同步修改 1：全局环境变量加入 node_modules\.bin 路径
+            ps1Builder.AppendLine("$env:PATH = \"$scriptDir\\nodejs;$scriptDir\\git_env\\cmd;$scriptDir\\openclaw_app\\node_modules\\.bin;$env:PATH\"");
+            
+            // === 新增：便携模式的环境变量劫持 ===
+            if (saveDataLocal)
+            {
+                ps1Builder.AppendLine("");
+                ps1Builder.AppendLine("# 启用便携模式：将核心用户目录重定向到安装目录下的 data 文件夹");
+                ps1Builder.AppendLine("$env:USERPROFILE = \"$scriptDir\\data\"");
+                ps1Builder.AppendLine("$env:HOME = \"$scriptDir\\data\"");
+                ps1Builder.AppendLine("$env:APPDATA = \"$scriptDir\\data\\AppData\\Roaming\"");
+                ps1Builder.AppendLine("$env:LOCALAPPDATA = \"$scriptDir\\data\\AppData\\Local\"");
+                ps1Builder.AppendLine("if (-not (Test-Path \"$scriptDir\\data\")) { New-Item -ItemType Directory -Force -Path \"$scriptDir\\data\" | Out-Null }");
+                ps1Builder.AppendLine("");
+            }
+
             // 注入智能探测逻辑：确保在虚拟机环境下不崩溃
             ps1Builder.AppendLine("# 智能硬件探测");
             ps1Builder.AppendLine("try {");
@@ -337,7 +377,6 @@ namespace OpenClawInstaller
             
             ps1Builder.AppendLine("Set-Location -Path \"$scriptDir\\openclaw_app\"");
             ps1Builder.AppendLine("");
-                        // --- 插入修复代码：定义缺失的 Run-Onboard 函数 ---
             ps1Builder.AppendLine("function Run-Onboard {");
             ps1Builder.AppendLine("    Clear-Host");
             ps1Builder.AppendLine("    Write-Host \"✓ 正在运行 OpenClaw Onboard 向导...\" -ForegroundColor Cyan");
@@ -354,13 +393,14 @@ namespace OpenClawInstaller
             ps1Builder.AppendLine("    Clear-Host");
             ps1Builder.AppendLine("    Write-Host \"  🦞 OpenClaw\"");
             ps1Builder.AppendLine("    Write-Host \"  All your chats, one OpenClaw.\"");
+            if (saveDataLocal) ps1Builder.AppendLine("    Write-Host \"  [已启用便携模式: 数据存储于本目录下]\" -ForegroundColor Green");
             ps1Builder.AppendLine("    if (-not (Get-Command wt.exe -ErrorAction SilentlyContinue)) {");
             ps1Builder.AppendLine("        Write-Host \"  [提示] 您的系统未安装 Windows Terminal，界面排版和图标可能无法完美显示。\" -ForegroundColor DarkYellow");
             ps1Builder.AppendLine("    }");
             ps1Builder.AppendLine("    Write-Host \"\"");
             ps1Builder.AppendLine("    Write-Host \"1. 运行 Onboard 向导 (官方引导设置，英文版)\"");
             ps1Builder.AppendLine("    Write-Host \"2. 运行 Gateway\"");
-            ps1Builder.AppendLine("    Write-Host \"3. 打开终端 (使用npx openclaw运行启动claw cli)\"");
+            ps1Builder.AppendLine("    Write-Host \"3. 打开终端 (可直接运行openclaw命令)\"");
             ps1Builder.AppendLine("    Write-Host \"4. 退出\"");
             ps1Builder.AppendLine("    Write-Host \"\"");
             ps1Builder.AppendLine("    $choice = Read-Host \"请输入选项 (1-4)，首次运行需要先执行 1 \"");
@@ -405,10 +445,16 @@ namespace OpenClawInstaller
             ps1Builder.AppendLine("}");
             ps1Builder.AppendLine("");
             ps1Builder.AppendLine("function Open-Terminal {");
-            ps1Builder.AppendLine("    $initCmd = \"Set-Location -LiteralPath `\"$scriptDir\\openclaw_app`\"; `$env:PATH = `\"$scriptDir\\nodejs;$scriptDir\\git_env\\cmd;`$env:PATH`\"\";");
+            // 注意这里：打开新终端也需要将新的环境变量传递过去
+            string terminalEnvInject = saveDataLocal 
+                ? " `$env:USERPROFILE = `\"$scriptDir\\data`\"; `$env:HOME = `\"$scriptDir\\data`\"; `$env:APPDATA = `\"$scriptDir\\data\\AppData\\Roaming`\"; `$env:LOCALAPPDATA = `\"$scriptDir\\data\\AppData\\Local`\"; "
+                : "";
+            
+            // 同步修改 2：在 Open-Terminal 的 $initCmd 中加入 node_modules\.bin 路径
+            ps1Builder.AppendLine($"    $initCmd = \"Set-Location -LiteralPath `\"$scriptDir\\openclaw_app`\"; `$env:PATH = `\"$scriptDir\\nodejs;$scriptDir\\git_env\\cmd;$scriptDir\\openclaw_app\\node_modules\\.bin;`$env:PATH`\";{terminalEnvInject}\";");
             ps1Builder.AppendLine("    $encodedCmd = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($initCmd))");
             ps1Builder.AppendLine("    if (Get-Command wt.exe -ErrorAction SilentlyContinue) {");
-            ps1Builder.AppendLine("        Start-Process wt.exe -ArgumentList \"-w new-tab --title OpenClaw终端 powershell -NoExit -EncodedCommand $encodedCmd\"");
+            ps1Builder.AppendLine("        Start-Process wt.exe -ArgumentList \"-w new-tab --title OpenClaw powershell -NoExit -EncodedCommand $encodedCmd\"");
             ps1Builder.AppendLine("    } else {");
             ps1Builder.AppendLine("        Start-Process powershell -ArgumentList \"-NoExit\", \"-EncodedCommand\", $encodedCmd");
             ps1Builder.AppendLine("    }");
@@ -471,13 +517,4 @@ namespace OpenClawInstaller
         }
     }
 }
-
-
-
-
-
-
-
-
-
 

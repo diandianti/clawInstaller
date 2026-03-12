@@ -10,6 +10,7 @@ namespace OpenClawInstaller
         private TextBox pathInput;
         private TextBox proxyInput;
         private CheckBox debugCheck;
+        private CheckBox saveDataLocalCheck; // 新增：保存数据到本地选项
         private Button deployBtn;
         private ProgressBar progressBar;
         private RichTextBox console;
@@ -17,7 +18,7 @@ namespace OpenClawInstaller
         public MainForm()
         {
             Text = "OpenClaw 自动化部署工具";
-            Size = new Size(640, 640);
+            Size = new Size(640, 660);
             StartPosition = FormStartPosition.CenterScreen;
             Font = new Font("Microsoft YaHei", 9.5F, FontStyle.Regular, GraphicsUnit.Point);
             FormBorderStyle = FormBorderStyle.FixedSingle;
@@ -47,7 +48,7 @@ namespace OpenClawInstaller
 
             // 1. 安装路径
             Label pathLabel = new Label { Text = "安装目录:", Location = new Point(20, yOffset + 5), AutoSize = true, ForeColor = Color.FromArgb(50, 50, 50) };
-            pathInput = new TextBox { Location = new Point(130, yOffset), Width = 370, ReadOnly = true, PlaceholderText = "请选择软件的安装路径...", BackColor = Color.White, BorderStyle = BorderStyle.FixedSingle, Font = new Font("Microsoft YaHei", 10F) };
+            pathInput = new TextBox { Location = new Point(140, yOffset), Width = 360, ReadOnly = true, PlaceholderText = "请选择软件的安装路径...", BackColor = Color.White, BorderStyle = BorderStyle.FixedSingle, Font = new Font("Microsoft YaHei", 10F) };
             Button browseBtn = new Button { Text = "浏览...", Location = new Point(510, yOffset - 2), Width = 80, Height = 28, Cursor = Cursors.Hand, BackColor = Color.FromArgb(224, 224, 224), FlatStyle = FlatStyle.Flat };
             browseBtn.FlatAppearance.BorderSize = 0;
             browseBtn.Click += (s, e) => {
@@ -59,10 +60,14 @@ namespace OpenClawInstaller
 
             // 2. GitHub 代理
             Label proxyLabel = new Label { Text = "Github 代理:", Location = new Point(20, yOffset + 5), AutoSize = true, ForeColor = Color.FromArgb(50, 50, 50) };
-            proxyInput = new TextBox { Location = new Point(130, yOffset), Width = 370, Text = "https://gh-proxy.com/", PlaceholderText = "例如 https://gh-proxy.com/ (留空则不使用代理)", BorderStyle = BorderStyle.FixedSingle, Font = new Font("Microsoft YaHei", 10F) };
+            proxyInput = new TextBox { Location = new Point(140, yOffset), Width = 360, Text = "https://gh-proxy.com/", PlaceholderText = "例如 https://gh-proxy.com/ (留空则不使用代理)", BorderStyle = BorderStyle.FixedSingle, Font = new Font("Microsoft YaHei", 10F) };
             
-            // Debug 开关移到代理旁边
+            // 选项开关
             debugCheck = new CheckBox { Text = "Debug 日志", Location = new Point(25, yOffset + 50), AutoSize = true, Cursor = Cursors.Hand, ForeColor = Color.DimGray };
+            
+            yOffset +=30;
+            // 新增：将数据保存在安装目录选项 (默认勾选)
+            saveDataLocalCheck = new CheckBox { Text = "将数据保存在安装目录 (便携模式)", Location = new Point(25, yOffset + 50), AutoSize = true, Cursor = Cursors.Hand, ForeColor = Color.DimGray, Checked = true };
 
             yOffset += 110;
 
@@ -87,7 +92,7 @@ namespace OpenClawInstaller
             };
 
             // 添加到窗体
-            Controls.AddRange(new Control[] { pathLabel, pathInput, browseBtn, proxyLabel, proxyInput, debugCheck, deployBtn, progressBar, logLabel, console });
+            Controls.AddRange(new Control[] { pathLabel, pathInput, browseBtn, proxyLabel, proxyInput, debugCheck, saveDataLocalCheck, deployBtn, progressBar, logLabel, console });
         }
 
         private async Task StartDeployment()
@@ -95,6 +100,7 @@ namespace OpenClawInstaller
             string installDir = pathInput.Text.Trim();
             string githubProxy = proxyInput.Text.Trim();
             bool isDebug = debugCheck.Checked;
+            bool saveDataLocal = saveDataLocalCheck.Checked; // 获取新选项
 
             if (string.IsNullOrEmpty(installDir)) { MessageBox.Show("请先选择安装目录！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
 
@@ -113,10 +119,11 @@ namespace OpenClawInstaller
 
             try
             {
-                var worker = new DeployWorker(installDir, githubProxy, isDebug);
+                // 传入 saveDataLocal 变量
+                var worker = new DeployWorker(installDir, githubProxy, isDebug, saveDataLocal);
                 await worker.RunAsync(progress, logger);
                 
-                MessageBox.Show("OpenClaw 部署成功！\n\n您现在可以运行安装目录下的 start.ps1 进行初始化配置。", "完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show("OpenClaw 部署成功！\n\n您现在可以运行安装目录下的 \"start.ps1\" 或者 \"点我运行.bat\" 进行初始化配置。", "完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
@@ -137,3 +144,4 @@ namespace OpenClawInstaller
         }
     }
 }
+
