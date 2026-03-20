@@ -4,6 +4,7 @@ using System.IO.Compression;
 using System.Diagnostics;
 using System.Text;
 using System.Threading.Tasks;
+using System.Collections.Generic;
 
 namespace OpenClawInstaller
 {
@@ -12,15 +13,20 @@ namespace OpenClawInstaller
         private readonly string installDir;
         private readonly string githubProxy;
         private readonly bool isDebug;
+        private readonly bool saveDataLocal;
+        private readonly bool downloadSkills; // 新增字段
 
-        private readonly string nodeUrl = "https://registry.npmmirror.com/-/binary/node/v25.8.0/node-v25.8.0-win-x64.zip";
+        private readonly string nodeUrl = "https://registry.npmmirror.com/-/binary/node/v24.14.0/node-v24.14.0-win-x64.zip";
         private readonly string gitUrl = "https://npmmirror.com/mirrors/git-for-windows/v2.44.0.windows.1/MinGit-2.44.0-64-bit.zip";
 
-        public DeployWorker(string installDir, string githubProxy, bool isDebug = false)
+        // 构造函数增加 downloadSkills 参数
+        public DeployWorker(string installDir, string githubProxy, bool isDebug = false, bool saveDataLocal = false, bool downloadSkills = false)
         {
             this.installDir = Path.GetFullPath(installDir);
             this.githubProxy = githubProxy?.Trim();
             this.isDebug = isDebug;
+            this.saveDataLocal = saveDataLocal;
+            this.downloadSkills = downloadSkills;
         }
 
         private void DebugLog(IProgress<string> logger, string message)
@@ -40,6 +46,89 @@ namespace OpenClawInstaller
             string nodejsDir = Path.Combine(installDir, "nodejs");
             string gitDir = Path.Combine(installDir, "git_env");
             string appDir = Path.Combine(installDir, "openclaw_app");
+            string dataDir = Path.Combine(installDir, "data");
+            string skillsBinDir = Path.Combine(installDir, "skills_bin"); // 新增：skills目录
+
+            if (saveDataLocal)
+            {
+                Directory.CreateDirectory(dataDir);
+                logger.Report($"已启用便携模式，数据将保存在: {dataDir}");
+            }
+
+            // 环境变量注入助手方法
+            void ApplyEnv(ProcessStartInfo psi, string pathEnv)
+            {
+                psi.EnvironmentVariables["PATH"] = pathEnv;
+                if (saveDataLocal)
+                {
+                    psi.EnvironmentVariables["USERPROFILE"] = dataDir;
+                    psi.EnvironmentVariables["HOME"] = dataDir;
+                    psi.EnvironmentVariables["APPDATA"] = Path.Combine(dataDir, "AppData", "Roaming");
+                    psi.EnvironmentVariables["LOCALAPPDATA"] = Path.Combine(dataDir, "AppData", "Local");
+                }
+            }
+
+            // ==========================================
+            // 新增：0. 处理 Skills 下载 (基于内置配置)
+            // ==========================================
+            List<string> skillsPaths = new List<string>();
+            if (downloadSkills)
+            {
+                Directory.CreateDirectory(skillsBinDir);
+                
+                foreach (var tool in SkillsConfig.Tools)
+                {
+                    if (string.IsNullOrEmpty(tool.Url)) continue;
+
+                    // 从 Url 解析出默认文件名（无后缀）作为备用名称
+                    string defaultName = Path.GetFileNameWithoutExtension(new Uri(tool.Url).LocalPath);
+                    string folderName = string.IsNullOrEmpty(tool.Name) ? defaultName : tool.Name;
+                    
+                    logger.Report($"准备处理 skills 工具: {folderName}");
+                    
+                    string targetUrl = tool.Url;
+                    
+                    // 应用 Github 代理
+                    if (!string.IsNullOrEmpty(githubProxy) && targetUrl.Contains("github.com"))
+                    {
+                        string proxy = githubProxy.EndsWith("/") ? githubProxy : githubProxy + "/";
+                        targetUrl = targetUrl.Replace("https://github.com/", proxy + "https://github.com/");
+                    }
+
+                    string toolDir = Path.Combine(skillsBinDir, folderName);
+                    
+                    if (Directory.Exists(toolDir))
+                    {
+                        logger.Report($"-> 检测到 {folderName} 目录已存在，跳过下载。");
+                    }
+                    else
+                    {
+                        string downloadDest = Path.Combine(installDir, Path.GetFileName(new Uri(tool.Url).LocalPath));
+                        logger.Report($"正在下载 {folderName}...");
+                        await Utils.DownloadFileAsync(targetUrl, downloadDest, p => {}); // 可以在此处添加分段进度提示
+                        
+                        logger.Report($"正在配置 {folderName}...");
+                        // 根据后缀判断是否解压，支持zip
+                        if (downloadDest.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Utils.ExtractZipDirect(downloadDest, toolDir);
+                            File.Delete(downloadDest);
+                        }
+                        else
+                        {
+                            Directory.CreateDirectory(toolDir);
+                            File.Move(downloadDest, Path.Combine(toolDir, Path.GetFileName(downloadDest)));
+                        }
+                    }
+
+                    // 拼接 bin 路径：将正反斜杠格式化兼容
+                    string binPath = string.IsNullOrEmpty(tool.BinDir) 
+                        ? toolDir 
+                        : Path.Combine(toolDir, tool.BinDir.TrimStart('/', '\\').Replace("/", "\\"));
+                    
+                    skillsPaths.Add(binPath);
+                }
+            }
 
             // ==========================================
             // 1. 处理 Node.js 环境
@@ -122,7 +211,7 @@ namespace OpenClawInstaller
                 CreateNoWindow = true,
                 StandardOutputEncoding = Encoding.UTF8
             };
-            psiNpmConfig.EnvironmentVariables["PATH"] = customPathEnv;
+            ApplyEnv(psiNpmConfig, customPathEnv);
 
             using (var process = new Process { StartInfo = psiNpmConfig })
             {
@@ -160,7 +249,7 @@ namespace OpenClawInstaller
                     CreateNoWindow = true,
                     StandardOutputEncoding = Encoding.UTF8
                 };
-                psiGitConfig.EnvironmentVariables["PATH"] = customPathEnv;
+                ApplyEnv(psiGitConfig, customPathEnv);
 
                 using (var process = new Process { StartInfo = psiGitConfig })
                 {
@@ -185,21 +274,50 @@ namespace OpenClawInstaller
             {
                 logger.Report($"正在通过 npm 安装 OpenClaw 核心组件 (第 {i + 1} 次尝试，最多 {maxRetries} 次)...");
                 if (i == 0) progress.Report(60);
+                string buildType = "cpu"; 
+                try 
+                {
+                   var checkGpu = new ProcessStartInfo
+                   {
+                       FileName = "nvidia-smi",
+                       Arguments = "-L",
+                       RedirectStandardOutput = true,
+                       UseShellExecute = false,
+                       CreateNoWindow = true
+                   };
+                   using (var p = Process.Start(checkGpu))
+                   {
+                        p.WaitForExit();
+                        if (p.ExitCode == 0) buildType = "cuda"; 
+                    }
+                }
+                catch 
+                {
+                   buildType = "cpu";
+                }
 
+                DebugLog(logger, $"检测到环境，设置编译类型为: {buildType}");
                 var psiInstall = new ProcessStartInfo
                 {
-                    FileName = npmCmdPath,
-                    Arguments = npmInstallArgs,
-                    WorkingDirectory = appDir,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    StandardOutputEncoding = Encoding.UTF8
+                        FileName = npmCmdPath,
+                        Arguments = npmInstallArgs, 
+                        WorkingDirectory = appDir,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        StandardOutputEncoding = Encoding.UTF8,
+                        StandardErrorEncoding = Encoding.UTF8
                 };
-                psiInstall.EnvironmentVariables["PATH"] = customPathEnv;
 
-                DebugLog(logger, $"执行命令: {psiInstall.FileName} {psiInstall.Arguments}");
+                ApplyEnv(psiInstall, customPathEnv);
+                psiInstall.EnvironmentVariables["NODE_LLAMA_CPP_BUILD_TYPE"] = buildType;
+                
+                if (buildType == "cpu")
+                {
+                    psiInstall.EnvironmentVariables["NODE_LLAMA_CPP_SKIP_DOWNLOAD"] = "true";
+                    psiInstall.EnvironmentVariables["NODE_LLAMA_CPP_FORCE_BUILD"] = "true";
+                }
 
                 using (var process = new Process { StartInfo = psiInstall })
                 {
@@ -245,7 +363,17 @@ namespace OpenClawInstaller
             ps1Builder.AppendLine("$scriptDir = $PSScriptRoot");
             ps1Builder.AppendLine("");
             
-            // 优先唤起 Windows Terminal
+            // 构建 Skills 的环境变量 PATH 注入片段
+            string skillsPathStr = "";
+            if (skillsPaths.Count > 0)
+            {
+                foreach (var path in skillsPaths)
+                {
+                    string relPath = path.Substring(installDir.Length).TrimStart(Path.DirectorySeparatorChar);
+                    skillsPathStr += $"$scriptDir\\{relPath};";
+                }
+            }
+
             ps1Builder.AppendLine("# 如果系统安装了 Windows Terminal 且当前不在其中，则使用其打开");
             ps1Builder.AppendLine("if ($env:WT_SESSION -eq $null -and (Get-Command wt.exe -ErrorAction SilentlyContinue)) {");
             ps1Builder.AppendLine("    $launchCmd = \"& `\"$PSCommandPath`\"\";");
@@ -255,7 +383,6 @@ namespace OpenClawInstaller
             ps1Builder.AppendLine("}");
             ps1Builder.AppendLine("");
             
-            // 开启 ANSI 支持
             ps1Builder.AppendLine("if ($PSVersionTable.PSVersion.Major -le 5 -or $env:WT_SESSION -eq $null) {");
             ps1Builder.AppendLine("    try {");
             ps1Builder.AppendLine("        $code = @\"");
@@ -283,10 +410,33 @@ namespace OpenClawInstaller
             ps1Builder.AppendLine("");
 
             ps1Builder.AppendLine("$host.UI.RawUI.WindowTitle = \"OpenClaw启动器\"");
-            ps1Builder.AppendLine("$env:PATH = \"$scriptDir\\nodejs;$scriptDir\\git_env\\cmd;$env:PATH\"");
+            
+            // 加入 skills 的 bin 目录到 PATH
+            ps1Builder.AppendLine($"$env:PATH = \"$scriptDir\\nodejs;$scriptDir\\git_env\\cmd;$scriptDir\\openclaw_app\\node_modules\\.bin;{skillsPathStr}$env:PATH\"");
+            
+            if (saveDataLocal)
+            {
+                ps1Builder.AppendLine("");
+                ps1Builder.AppendLine("# 启用便携模式：将核心用户目录重定向到安装目录下的 data 文件夹");
+                ps1Builder.AppendLine("$env:USERPROFILE = \"$scriptDir\\data\"");
+                ps1Builder.AppendLine("$env:HOME = \"$scriptDir\\data\"");
+                ps1Builder.AppendLine("$env:APPDATA = \"$scriptDir\\data\\AppData\\Roaming\"");
+                ps1Builder.AppendLine("$env:LOCALAPPDATA = \"$scriptDir\\data\\AppData\\Local\"");
+                ps1Builder.AppendLine("if (-not (Test-Path \"$scriptDir\\data\")) { New-Item -ItemType Directory -Force -Path \"$scriptDir\\data\" | Out-Null }");
+                ps1Builder.AppendLine("");
+            }
+
+            ps1Builder.AppendLine("# 智能硬件探测");
+            ps1Builder.AppendLine("try {");
+            ps1Builder.AppendLine("    $ErrorActionPreference = 'SilentlyContinue'");
+            ps1Builder.AppendLine("    nvidia-smi -L > $null 2>&1");
+            ps1Builder.AppendLine("    if ($LASTEXITCODE -eq 0) { $env:NODE_LLAMA_CPP_BUILD_TYPE = 'cuda' }");
+            ps1Builder.AppendLine("    else { $env:NODE_LLAMA_CPP_BUILD_TYPE = 'cpu' }");
+            ps1Builder.AppendLine("} catch { $env:NODE_LLAMA_CPP_BUILD_TYPE = 'cpu' }");
+            ps1Builder.AppendLine("finally { $ErrorActionPreference = 'Continue' }");
+            
             ps1Builder.AppendLine("Set-Location -Path \"$scriptDir\\openclaw_app\"");
             ps1Builder.AppendLine("");
-                        // --- 插入修复代码：定义缺失的 Run-Onboard 函数 ---
             ps1Builder.AppendLine("function Run-Onboard {");
             ps1Builder.AppendLine("    Clear-Host");
             ps1Builder.AppendLine("    Write-Host \"✓ 正在运行 OpenClaw Onboard 向导...\" -ForegroundColor Cyan");
@@ -303,13 +453,15 @@ namespace OpenClawInstaller
             ps1Builder.AppendLine("    Clear-Host");
             ps1Builder.AppendLine("    Write-Host \"  🦞 OpenClaw\"");
             ps1Builder.AppendLine("    Write-Host \"  All your chats, one OpenClaw.\"");
+            if (saveDataLocal) ps1Builder.AppendLine("    Write-Host \"  [已启用便携模式: 数据存储于本目录下]\" -ForegroundColor Green");
+            if (downloadSkills) ps1Builder.AppendLine("    Write-Host \"  [Skills 组件已挂载]\" -ForegroundColor Cyan");
             ps1Builder.AppendLine("    if (-not (Get-Command wt.exe -ErrorAction SilentlyContinue)) {");
             ps1Builder.AppendLine("        Write-Host \"  [提示] 您的系统未安装 Windows Terminal，界面排版和图标可能无法完美显示。\" -ForegroundColor DarkYellow");
             ps1Builder.AppendLine("    }");
             ps1Builder.AppendLine("    Write-Host \"\"");
             ps1Builder.AppendLine("    Write-Host \"1. 运行 Onboard 向导 (官方引导设置，英文版)\"");
             ps1Builder.AppendLine("    Write-Host \"2. 运行 Gateway\"");
-            ps1Builder.AppendLine("    Write-Host \"3. 打开终端 (使用npx openclaw运行启动claw cli)\"");
+            ps1Builder.AppendLine("    Write-Host \"3. 打开终端 (可直接运行openclaw命令)\"");
             ps1Builder.AppendLine("    Write-Host \"4. 退出\"");
             ps1Builder.AppendLine("    Write-Host \"\"");
             ps1Builder.AppendLine("    $choice = Read-Host \"请输入选项 (1-4)，首次运行需要先执行 1 \"");
@@ -354,10 +506,16 @@ namespace OpenClawInstaller
             ps1Builder.AppendLine("}");
             ps1Builder.AppendLine("");
             ps1Builder.AppendLine("function Open-Terminal {");
-            ps1Builder.AppendLine("    $initCmd = \"Set-Location -LiteralPath `\"$scriptDir\\openclaw_app`\"; `$env:PATH = `\"$scriptDir\\nodejs;$scriptDir\\git_env\\cmd;`$env:PATH`\"\";");
+            
+            string terminalEnvInject = saveDataLocal 
+                ? " `$env:USERPROFILE = `\"$scriptDir\\data`\"; `$env:HOME = `\"$scriptDir\\data`\"; `$env:APPDATA = `\"$scriptDir\\data\\AppData\\Roaming`\"; `$env:LOCALAPPDATA = `\"$scriptDir\\data\\AppData\\Local`\"; "
+                : "";
+            
+            string escapedSkillsPathStr = skillsPathStr.Replace("$", "`$");
+            ps1Builder.AppendLine($"    $initCmd = \"Set-Location -LiteralPath `\"$scriptDir\\openclaw_app`\"; `$env:PATH = `\"$scriptDir\\nodejs;$scriptDir\\git_env\\cmd;$scriptDir\\openclaw_app\\node_modules\\.bin;{escapedSkillsPathStr}`$env:PATH`\";{terminalEnvInject}\";");
             ps1Builder.AppendLine("    $encodedCmd = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($initCmd))");
             ps1Builder.AppendLine("    if (Get-Command wt.exe -ErrorAction SilentlyContinue) {");
-            ps1Builder.AppendLine("        Start-Process wt.exe -ArgumentList \"-w new-tab --title OpenClaw终端 powershell -NoExit -EncodedCommand $encodedCmd\"");
+            ps1Builder.AppendLine("        Start-Process wt.exe -ArgumentList \"-w new-tab --title OpenClaw powershell -NoExit -EncodedCommand $encodedCmd\"");
             ps1Builder.AppendLine("    } else {");
             ps1Builder.AppendLine("        Start-Process powershell -ArgumentList \"-NoExit\", \"-EncodedCommand\", $encodedCmd");
             ps1Builder.AppendLine("    }");
@@ -373,11 +531,10 @@ namespace OpenClawInstaller
             DebugLog(logger, $"启动脚本已保存至: {ps1Path}");
 
             // ==========================================
-            // 6.5 生成 start.bat 快捷启动文件 (解决双击 .ps1 变成编辑的问题)
+            // 6.5 生成 start.bat 快捷启动文件
             // ==========================================
             logger.Report("正在生成 start.bat 快捷启动文件...");
             string batPath = Path.Combine(installDir, "点我运行.bat");
-            // 使用带有绕过执行策略参数的命令
             string batContent = "@echo off\r\n" +
                                 "pushd \"%~dp0\"\r\n" +
                                 "powershell -ExecutionPolicy Bypass -File \"start.ps1\"\r\n" +
@@ -420,4 +577,3 @@ namespace OpenClawInstaller
         }
     }
 }
-

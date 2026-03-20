@@ -8,12 +8,14 @@ OpenClaw Installer 是一个专为 Windows 用户打造的 **C# 原生桌面应�
 
 ## ✨ 核心特性
 
-* 📦 **环境绝对隔离**：自动下载便携版 Node.js (v25) 和 MinGit，不污染你的系统全局变量，随用随删。
+* 📦 **环境绝对隔离**：自动下载便携版 Node.js (v22.13.1) 和 MinGit (v2.44.0)，不污染您的系统全局变量，随用随删。
+* 🎒 **原生便携模式 (Portable Mode)**：可选将所有用户数据（`USERPROFILE`、`APPDATA` 等）重定向并保存在安装目录下的 `data` 文件夹中，实现真正的绿色免安装，装进 U 盘带走即可运行。
 * 🚀 **专为国内网络优化**：
     * 自动配置 NPM 淘宝镜像源 (`registry.npmmirror.com`)。
     * 内置 GitHub 代理支持，利用 Git `insteadOf` 策略自动重写底层的 `ssh://` 和 `https://` 请求，彻底告别 `Exit code 128` 和权限拒绝错误。
-* 🎮 **一键启动**：部署完成后，生成一键启动脚本 `start.ps1` 用来显示交互菜单
-* 🍋‍🟩 **绿色纯净**：不想用龙虾了，直接删除部署文件夹即可
+* 🧠 **智能硬件探测**：在部署核心组件时，自动检测系统是否具备 NVIDIA 显卡 (`nvidia-smi`)，智能选择编译类型为 `cuda` 或 `cpu`，最大化利用硬件性能。
+* 🛠️ **Skills 扩展组件支持**：一键可选挂载常用技能所需的环境和工具，自动化下载并配置环境变量。
+* 🎮 **无脑一键启动**：部署完成后，自动生成交互式 `start.ps1` 和便捷的 `点我运行.bat`，双击即可唤出功能菜单。
 * 🐛 **调试模式**：内置 Debug 开关，一键开启底层的完整进程日志，排障无忧。
 
 ## 🚀 快速上手
@@ -26,6 +28,16 @@ OpenClaw Installer 是一个专为 Windows 用户打造的 **C# 原生桌面应�
 4. **启动 OpenClaw**：部署完成后，进入安装目录，双击运行 `start.ps1`，即可体验你的专属 AI 网关！
 5. **配置**：按照openclaw引导配置即可。 
 
+## skills 程序支持
+
+- gh
+- gog
+- python
+- ffmpeg
+- camsnap
+- blucli
+- uv
+
 ## 已知问题
 ~~win11下面启动gateway会失败，正在修补中~~
 
@@ -33,9 +45,9 @@ OpenClaw Installer 是一个专为 Windows 用户打造的 **C# 原生桌面应�
 
 - [ ] 已有环境检查
 
-- [ ] 将用户目录更改到安装目录
+- [x] 将用户数据更改到安装目录
 
-- [ ] skills程序安装
+- [x] skills程序安装
 
 ## 🛠️ 本地编译构建
 
@@ -50,6 +62,7 @@ OpenClaw Installer 是一个专为 Windows 用户打造的 **C# 原生桌面应�
 ## 📝 开源协议
 
 [MIT License](LICENSE)
+
 
 
 

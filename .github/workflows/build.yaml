@@ -53,7 +53,8 @@ jobs:
           这是由 GitHub Actions 自动生成的纯净构建版本。
           - 源码来源: ${{ github.server_url }}/${{ github.repository }}
           - 构建时间: ${{ steps.tag.outputs.release_tag }}
-          - 安全提示: 建议在虚拟机中运行。
+          - 安全提示: openclaw运行后可以直接访问您的全部文件，如果您对安全有相关的问题担忧，可以在虚拟机中运行本软件将openclaw部署至虚拟机，或者您可以使用沙盒软件来运行推荐 https://github.com/sandboxie-plus/Sandboxie/releases
+          - **注**：本程序只会写入您指定的安装路径，安装完成后即可关闭或者删除，对后续使用openclaw没有任何影响。
         draft: false
         prerelease: false
         files: ./publish_output/OpenClawInstaller.exe
@@ -65,3 +66,4 @@ jobs:
       with:
         name: OpenClawInstaller-win-x64
         path: ./publish_output/OpenClawInstaller.exe
+
